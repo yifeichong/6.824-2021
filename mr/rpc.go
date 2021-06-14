@@ -9,6 +9,11 @@ package mr
 import "os"
 import "strconv"
 
+const (
+	Map = iota
+	Reduce
+)
+
 //
 // example to show how to declare the arguments
 // and reply for an RPC.
@@ -23,7 +28,14 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+type Args struct {
+	ResultFname string
+}
 
+type Reply struct {
+	Mode  int // NOTE: enum Map or Reduce
+	Input string
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

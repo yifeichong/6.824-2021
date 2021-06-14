@@ -6,15 +6,14 @@ test-mr:
 
 .PHONY: mrcoordinator
 mrcoordinator:
-	go build -race -buildmode=plugin ./mrapps/wc.go
-	rm ./main/rm-out*
-	echo "*** Starting mr coordinator"
-	go run -race ./main/mrcoordinator.go ./main/pg-*.txt
+	cd ./main && \
+	go build -race -buildmode=plugin ../mrapps/$(app_source) && \
+	rm -f rm-out* && \
+	echo "*** Starting mr coordinator" && \
+	go run -race mrcoordinator.go pg-*.txt
 
 .PHONY: mrworker
 mrworker:
-	echo "--- Starting mr worker"
-	go run -race ./main/mrworkr.go ./main/wc.so
-
-.PHONY: run-mr
-run-mr: mrcoordinator mrworker mrworker mrworker
+	cd ./main && \
+	echo "--- Starting mr worker" && \
+	go run -race mrworker.go ./$(compiled)

@@ -1,10 +1,12 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,7 +26,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
@@ -32,6 +33,12 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
+	resultFileName := ""
+	for {
+		reply := CallForWork(resultFileName)
+		fmt.Printf("reply: %v\n", reply.Input)
+		time.Sleep(time.Second * 1)
+	}
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
@@ -59,6 +66,13 @@ func CallExample() {
 
 	// reply.Y should be 100.
 	fmt.Printf("reply.Y %v\n", reply.Y)
+}
+
+func CallForWork(resultFileName string) *Reply {
+	args := Args{ResultFname: resultFileName}
+	reply := Reply{}
+	call("Coordinator.MapTask", &args, &reply)
+	return &reply
 }
 
 //

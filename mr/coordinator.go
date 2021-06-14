@@ -8,7 +8,10 @@ import "net/http"
 
 type Coordinator struct {
 	// Your definitions here.
-	nReduce int
+	// nReduce    int
+	// toDo       chan string
+	// inProgress chan string
+	// timeout    int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -20,6 +23,12 @@ type Coordinator struct {
 //
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
+	return nil
+}
+
+func (c *Coordinator) MapTask(args *Args, reply *Reply) error {
+	reply.Mode = Map
+	reply.Input = "filename"
 	return nil
 }
 
@@ -45,6 +54,7 @@ func (c *Coordinator) server() {
 //
 func (c *Coordinator) Done() bool {
 	ret := false
+	// ret := true // NOTE: true for tests
 
 	// Your code here.
 
@@ -57,9 +67,7 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{
-		nReduce,
-	}
+	c := Coordinator{}
 
 	// Your code here.
 
