@@ -28,13 +28,16 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+// Args holds the list of intermediate
 type Args struct {
-	ResultFname string
+	Mode            int // NOTE: enum for operation type - Map or Reduce
+	Done            bool
+	FileNamePattern string
 }
 
 type Reply struct {
-	Mode  int // NOTE: enum Map or Reduce
-	Input string
+	Mode            int // NOTE: enum for operation type - Map or Reduce
+	FileNamePattern string
 }
 
 // Cook up a unique-ish UNIX-domain socket name

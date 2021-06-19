@@ -14,6 +14,5 @@ mrcoordinator:
 
 .PHONY: mrworker
 mrworker:
-	cd ./main && \
 	echo "--- Starting mr worker" && \
 	go run -race mrworker.go ./$(compiled)

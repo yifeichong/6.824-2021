@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+const (
+	bufferSize = 200 // needed for storing temporary file
+)
+
 //
 // Map functions return a slice of KeyValue.
 //
@@ -33,12 +37,25 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-	resultFileName := ""
+	args := Args{}
+	reply := Reply{}
 	for {
-		reply := CallForWork(resultFileName)
-		fmt.Printf("reply: %v\n", reply.Input)
+		success := call("Coordinator.ScheduleTask", &args, &reply)
+		if !success {
+			return // NOTE: terminate if it smth wrong with coordinator
+		}
+		switch reply.Mode {
+		case Map:
+			fmt.Printf("reply map task: %v\n", reply.FileNamePattern)
+			// read file by reply.task and pass it to the map func
+		case Reduce:
+			fmt.Printf("reply reduce task: %v\n", reply.FileNamePattern)
+			// read files with reply.Task postfix
+			// merge, sort and pass the result to the reduce func
+		}
 		time.Sleep(time.Second * 1)
 	}
+	//
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
@@ -66,13 +83,6 @@ func CallExample() {
 
 	// reply.Y should be 100.
 	fmt.Printf("reply.Y %v\n", reply.Y)
-}
-
-func CallForWork(resultFileName string) *Reply {
-	args := Args{ResultFname: resultFileName}
-	reply := Reply{}
-	call("Coordinator.MapTask", &args, &reply)
-	return &reply
 }
 
 //
