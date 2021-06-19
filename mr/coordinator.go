@@ -71,18 +71,6 @@ type Coordinator struct {
 	tasksDone       *concurrentMap
 }
 
-// Your code here -- RPC handlers for the worker to call.
-
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
-
 func (c *Coordinator) restartTaskByTimeout(args Args) {
 	c.constants.mx.RLock()
 	timeout := c.constants.timeout
@@ -104,8 +92,20 @@ func (c *Coordinator) restartTaskByTimeout(args Args) {
 	}
 }
 
+// Your code here -- RPC handlers for the worker to call.
+
+//
+// an example RPC handler.
+//
+// the RPC argument and reply types are defined in rpc.go.
+//
+func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
+	reply.Y = args.X + 1
+	return nil
+}
+
 func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
-	if !args.Done {
+	if !args.Done && c.tasksInProgress.len() > 0 {
 		switch args.Mode {
 		case Map:
 			c.mapTasksToDo <- args.FileNamePattern
@@ -121,6 +121,9 @@ func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
 	case fname := <-c.mapTasksToDo:
 		reply.Mode = Map
 		reply.FileNamePattern = fname
+		c.constants.mx.RLock()
+		reply.NReduce = c.constants.nReduce
+		c.constants.mx.RUnlock()
 		c.tasksInProgress.set(fname)
 	case fname := <-c.reduceTasksToDo:
 		reply.Mode = Reduce
@@ -172,7 +175,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			nMap:    len(files),
 			nReduce: nReduce,
 			nTotal:  nReduce * len(files),
-			timeout: 10,
+			timeout: 10, // NOTE: wait 10 seconds max, then re-schedule task
 		},
 		mapTasksToDo:    make(chan string, len(files)),
 		reduceTasksToDo: make(chan string, nReduce),

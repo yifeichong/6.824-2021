@@ -10,7 +10,8 @@ import "os"
 import "strconv"
 
 const (
-	Map = iota
+	None = iota
+	Map
 	Reduce
 )
 
@@ -37,6 +38,7 @@ type Args struct {
 
 type Reply struct {
 	Mode            int // NOTE: enum for operation type - Map or Reduce
+	NReduce         int
 	FileNamePattern string
 }
 
