@@ -78,7 +78,7 @@ func readIntermediateFile(fname string) ([]KeyValue, error) {
 	return kva, nil
 }
 
-func writeOutputFile(fname string, intermediate []KeyValue, reducef func(string, []string) string) error {
+func reduceWriteOutput(fname string, intermediate []KeyValue, reducef func(string, []string) string) error {
 	ofile, err := os.Create(fname)
 	defer ofile.Close()
 	if err != nil {
@@ -119,14 +119,25 @@ func Worker(mapf func(string, string) []KeyValue,
 	args := Args{}
 	reply := Reply{}
 	for {
-		success := call("Coordinator.ScheduleTask", &args, &reply)
+		time.Sleep(time.Second * 1)
+		success := call("Coordinator.ScheduleTask", &Args{}, &reply)
 		if !success {
-			return // NOTE: terminate if it smth wrong with the coordinator
+			return // NOTE: terminate if it's smth wrong with the coordinator
 		}
+
+		// TODO: remove
+		fmt.Println(reply)
+
+		args = Args{
+			Mode: reply.Mode,
+			Task: reply.Task,
+		}
+
+		pwd, _ := os.Getwd()
 		switch reply.Mode {
 		case Map:
-			fmt.Printf("reply map task: %v\n", reply.FileNamePattern)
-			fnames, err := filepath.Glob(reply.FileNamePattern) // TODO: abs path must be here
+			fileNamePattern := filepath.Join(pwd, reply.Task.FileName)
+			fnames, err := filepath.Glob(fileNamePattern)
 			if err != nil || len(fnames) == 0 {
 				continue
 			}
@@ -142,29 +153,50 @@ func Worker(mapf func(string, string) []KeyValue,
 					intermediate[reduceTaskNumber] = append(intermediate[reduceTaskNumber], kv)
 				}
 			}
+			// TODO: save in the format "mr-mapId-reduceId"
 			for k, v := range intermediate {
-				writeIntermediateFile(fmt.Sprintf("mr-%v", k), v)
+				err = writeIntermediateFile(fmt.Sprintf("mr-%v", k), v)
+				if err != nil {
+					continue
+				}
 			}
 		case Reduce:
-			fmt.Printf("reply reduce task: %v\n", reply.FileNamePattern)
-			fnames, err := filepath.Glob(reply.FileNamePattern) // TODO: abs path must be here
+			fileNamePattern := filepath.Join(
+				pwd,
+				fmt.Sprintf("*-%v", reply.Task.FileName),
+			)
+			fnames, err := filepath.Glob(fileNamePattern)
+
+			// TODO: remove
+			fmt.Println("REDUCE", reply.Mode, reply.Task, fnames)
+
 			if err != nil || len(fnames) == 0 {
 				continue
 			}
 			intermediate := []KeyValue{}
 			for _, fname := range fnames {
-				kva, err := readIntermediateFile(fname)
-				if err != nil {
-					continue
-				}
+				kva, _ := readIntermediateFile(fname)
 				intermediate = append(intermediate, kva...)
+			}
+			if len(intermediate) == 0 {
+				continue
 			}
 			sort.Sort(ByKey(intermediate))
 
-			oname := fmt.Sprintf("mr-out-%v", reply.FileNamePattern)
-			writeOutputFile(oname, intermediate, reducef)
-		default:
-			time.Sleep(time.Second * 1)
+			oname := fmt.Sprintf("mr-out-%v", reply.Task.FileName)
+			err = reduceWriteOutput(oname, intermediate, reducef)
+			if err != nil {
+				continue
+			}
+			// NOTE: after writing the final result, we can delete
+			//       intermediate files for that reducer
+			for _, fname := range fnames {
+				os.Remove(fname)
+			}
+		}
+		success = call("Coordinator.CommitTask", &args, &Reply{})
+		if !success {
+			return
 		}
 	}
 

@@ -6,16 +6,21 @@
 Implementation of map reduce is inside `./mr` directory. It consists of coordinator and worker.  
 Test map reduce implementation:  
 ```
-make test-mr
+cd ./main 
+bash test-mr.sh
 ```  
 Implementation of the map reduce should produce the same output as a sequential one (`./main/mrsequential.go`).  
-To run map-reduce first run coordinator process (master) passing the **source file** with map and reduce functions (placed in `./mrapps`):  
+To run map-reduce, first compile the plugin with map and reduce functions (placed in `./mrapps`):  
 ```
-make mrcoordinator app_source=wc.go
+go build -race -buildmode=plugin ../mrapps/wc.go
 ```  
-And then run several workers in the other shells passing file name of the pre-built app (placed in `./main` after running coordinator):  
+Then you're ready to run the coordinator (master) process:
 ```
-make mrworker compiled=wc.so
+make mrcoordinator
+```  
+And then run several workers in the other shells passing file name of the pre-built app (placed in `./main` after being built):  
+```
+make mrworker compiled=./wc.so
 ```  
 
 ### How it works  
