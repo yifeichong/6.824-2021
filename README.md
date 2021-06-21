@@ -16,11 +16,12 @@ go build -race -buildmode=plugin ../mrapps/wc.go
 ```  
 Then you're ready to run the coordinator (master) process:
 ```
-make mrcoordinator
+rm -f mr-out*
+go run -race mrcoordinator.go pg-*.txt
 ```  
 And then run several workers in the other shells passing file name of the pre-built app (placed in `./main` after being built):  
 ```
-make mrworker compiled=./wc.so
+go run -race mrworker.go ./wc.so
 ```  
 
 ### How it works  

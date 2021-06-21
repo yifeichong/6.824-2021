@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -98,14 +99,15 @@ func (c *Coordinator) restartTaskByTimeout(reply Reply) {
 		if elapsedTimeSeconds >= timeout && val == -1 {
 			switch reply.Mode {
 			case Map:
+				removeFiles(fmt.Sprintf("mr-%v*", reply.Task.Index))
 				c.mapTasksToDo <- reply.Task
 			case Reduce:
+				removeFiles(fmt.Sprintf("mr-out-%v*", reply.Task.Index))
 				c.reduceTasksToDo <- reply.Task
 			default:
 				return
 			}
 			c.tasksInProgress.pop(reply.Task.FileName)
-			log.Printf("(%v) Task with filename `%v` has been canceled", reply.Mode, reply.Task.FileName)
 			return
 		}
 		time.Sleep(time.Second * 1)
@@ -191,7 +193,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		constants: &coordinatorConstants{
 			nMap:    len(files),
 			nReduce: nReduce,
-			nTotal:  nReduce * len(files),
+			nTotal:  nReduce + len(files),
 			timeout: 10, // NOTE: wait 10 seconds max, then re-schedule task
 		},
 		mapTasksToDo:    make(chan Task, len(files)),

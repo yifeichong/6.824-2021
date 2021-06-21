@@ -44,18 +44,25 @@ func readFile(fname string) (string, error) {
 	return string(content), nil
 }
 
-func writeIntermediateFile(fname string, data []KeyValue) error {
-	ofile, err := os.Create(fname)
+func generateTmpFile() (string, error) {
+	ofile, err := ioutil.TempFile("./", "mr.*")
+	if err != nil {
+		return "", err
+	}
+	defer ofile.Close()
+	return ofile.Name(), nil
+}
+
+func writeIntermediateFile(fname string, kv KeyValue) error {
+	ofile, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	defer ofile.Close()
 	if err != nil {
 		return err
 	}
 	enc := json.NewEncoder(ofile)
-	for _, kv := range data {
-		err := enc.Encode(&kv)
-		if err != nil {
-			return err
-		}
+	err = enc.Encode(&kv)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -78,12 +85,12 @@ func readIntermediateFile(fname string) ([]KeyValue, error) {
 	return kva, nil
 }
 
-func reduceWriteOutput(fname string, intermediate []KeyValue, reducef func(string, []string) string) error {
-	ofile, err := os.Create(fname)
-	defer ofile.Close()
+func writeReduce(oname string, intermediate []KeyValue, reducef func(string, []string) string) error {
+	ofile, err := ioutil.TempFile("./", "mr.*")
 	if err != nil {
 		return err
 	}
+	defer ofile.Close()
 	i := 0
 	for i < len(intermediate) {
 		j := i + 1
@@ -98,8 +105,22 @@ func reduceWriteOutput(fname string, intermediate []KeyValue, reducef func(strin
 		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
 		i = j
 	}
+	err = os.Rename(ofile.Name(), oname)
+	if err != nil {
+		return err
+	}
 	return nil
+}
 
+func removeFiles(pattern string) error {
+	fnames, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+	for _, fname := range fnames {
+		os.Remove(fname)
+	}
+	return nil
 }
 
 // for sorting by key
@@ -125,39 +146,45 @@ func Worker(mapf func(string, string) []KeyValue,
 			return // NOTE: terminate if it's smth wrong with the coordinator
 		}
 
-		pwd, _ := os.Getwd()
 		switch reply.Mode {
 		case Map:
-			fileNamePattern := filepath.Join(pwd, reply.Task.FileName)
-			fnames, err := filepath.Glob(fileNamePattern)
+			fnames, err := filepath.Glob(reply.Task.FileName)
 			if err != nil || len(fnames) == 0 {
 				continue
 			}
 			// NOTE: fill the intermediate kv pairs map for each reducer first
-			intermediate := make(map[int][]KeyValue)
+			tempFnames := make(map[int]string)
 			for _, fname := range fnames {
 				content, err := readFile(fname)
 				if err != nil {
-					continue
+					log.Fatal(err)
 				}
 				kva := mapf(fname, content)
 				for _, kv := range kva {
 					reduceTaskNumber := ihash(kv.Key) % reply.NReduce
-					intermediate[reduceTaskNumber] = append(intermediate[reduceTaskNumber], kv)
+					tempFname, ok := tempFnames[reduceTaskNumber]
+					if !ok {
+						tempFname, err = generateTmpFile()
+						if err != nil {
+							log.Fatal(err)
+						}
+						tempFnames[reduceTaskNumber] = tempFname
+					}
+					err = writeIntermediateFile(tempFname, kv)
+					if err != nil {
+						log.Fatal(err)
+					}
 				}
 			}
-			// NOTE: dump intermediate results on disk
-			for k, v := range intermediate {
-				err = writeIntermediateFile(fmt.Sprintf("mr-%v-%v", reply.Task.Index, k), v)
+			for k, v := range tempFnames {
+				intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
+				err = os.Rename(v, intermediateFname)
 				if err != nil {
-					continue
+					log.Fatal(err)
 				}
 			}
 		case Reduce:
-			fileNamePattern := filepath.Join(
-				pwd,
-				fmt.Sprintf("*-%v", reply.Task.FileName),
-			)
+			fileNamePattern := fmt.Sprintf("*-%v", reply.Task.Index)
 			fnames, err := filepath.Glob(fileNamePattern)
 
 			if err != nil || len(fnames) == 0 {
@@ -173,10 +200,10 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 			sort.Sort(ByKey(intermediate))
 
-			oname := fmt.Sprintf("mr-out-%v", reply.Task.FileName)
-			err = reduceWriteOutput(oname, intermediate, reducef)
+			oname := fmt.Sprintf("mr-out-%v", reply.Task.Index)
+			err = writeReduce(oname, intermediate, reducef)
 			if err != nil {
-				continue
+				log.Fatal(err)
 			}
 			// NOTE: after writing the final result, we can delete
 			//       intermediate files for that reducer
