@@ -70,6 +70,18 @@ func (c *coordinatorConstants) getMapTasksAmount() int {
 	return c.nMap
 }
 
+func (c *coordinatorConstants) getNReduce() int {
+	c.mx.RLock()
+	defer c.mx.RUnlock()
+	return c.nReduce
+}
+
+func (c *coordinatorConstants) getTimeout() int {
+	c.mx.RLock()
+	defer c.mx.RUnlock()
+	return c.timeout
+}
+
 type Coordinator struct {
 	constants       *coordinatorConstants
 	mapTasksToDo    chan Task
@@ -79,9 +91,7 @@ type Coordinator struct {
 }
 
 func (c *Coordinator) restartTaskByTimeout(reply Reply) {
-	c.constants.mx.RLock()
-	timeout := c.constants.timeout
-	c.constants.mx.RUnlock()
+	timeout := c.constants.getTimeout()
 	elapsedTimeSeconds := 0
 	for {
 		val := c.tasksDone.get(reply.Task.FileName)
@@ -117,19 +127,12 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 
 func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
 	reply.Mode = None
-	reply.Task = Task{}
 	if len(c.mapTasksToDo) > 0 {
 		reply.Task = <-c.mapTasksToDo
 		reply.Mode = Map
-		c.constants.mx.RLock()
-		reply.NReduce = c.constants.nReduce
-		c.constants.mx.RUnlock()
+		reply.NReduce = c.constants.getNReduce()
 		c.tasksInProgress.set(reply.Task.FileName, reply.Task.Index)
 		go c.restartTaskByTimeout(*reply)
-
-		// TODO: remove
-		log.Println("MAP", len(c.mapTasksToDo), len(c.reduceTasksToDo), c.tasksInProgress.len(), c.tasksDone.len())
-
 		return nil
 	}
 	if (len(c.reduceTasksToDo) > 0) && (c.tasksDone.len() >= c.constants.getMapTasksAmount()) {
@@ -137,9 +140,7 @@ func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
 		reply.Mode = Reduce
 		c.tasksInProgress.set(reply.Task.FileName, reply.Task.Index)
 		go c.restartTaskByTimeout(*reply)
-
-		// TODO: remove
-		log.Println("REDUCE", len(c.mapTasksToDo), len(c.reduceTasksToDo), c.tasksInProgress.len(), c.tasksDone.len())
+		return nil
 	}
 	return nil
 }

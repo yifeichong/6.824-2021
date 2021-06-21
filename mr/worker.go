@@ -125,14 +125,6 @@ func Worker(mapf func(string, string) []KeyValue,
 			return // NOTE: terminate if it's smth wrong with the coordinator
 		}
 
-		// TODO: remove
-		fmt.Println(reply)
-
-		args = Args{
-			Mode: reply.Mode,
-			Task: reply.Task,
-		}
-
 		pwd, _ := os.Getwd()
 		switch reply.Mode {
 		case Map:
@@ -141,6 +133,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			if err != nil || len(fnames) == 0 {
 				continue
 			}
+			// NOTE: fill the intermediate kv pairs map for each reducer first
 			intermediate := make(map[int][]KeyValue)
 			for _, fname := range fnames {
 				content, err := readFile(fname)
@@ -153,9 +146,9 @@ func Worker(mapf func(string, string) []KeyValue,
 					intermediate[reduceTaskNumber] = append(intermediate[reduceTaskNumber], kv)
 				}
 			}
-			// TODO: save in the format "mr-mapId-reduceId"
+			// NOTE: dump intermediate results on disk
 			for k, v := range intermediate {
-				err = writeIntermediateFile(fmt.Sprintf("mr-%v", k), v)
+				err = writeIntermediateFile(fmt.Sprintf("mr-%v-%v", reply.Task.Index, k), v)
 				if err != nil {
 					continue
 				}
@@ -166,9 +159,6 @@ func Worker(mapf func(string, string) []KeyValue,
 				fmt.Sprintf("*-%v", reply.Task.FileName),
 			)
 			fnames, err := filepath.Glob(fileNamePattern)
-
-			// TODO: remove
-			fmt.Println("REDUCE", reply.Mode, reply.Task, fnames)
 
 			if err != nil || len(fnames) == 0 {
 				continue
@@ -193,6 +183,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			for _, fname := range fnames {
 				os.Remove(fname)
 			}
+		default:
+			continue
+		}
+
+		args = Args{
+			Mode: reply.Mode,
+			Task: reply.Task,
 		}
 		success = call("Coordinator.CommitTask", &args, &Reply{})
 		if !success {

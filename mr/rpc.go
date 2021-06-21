@@ -10,9 +10,9 @@ import "os"
 import "strconv"
 
 const (
-	None = iota
-	Map
+	Map = iota
 	Reduce
+	None
 )
 
 //
