@@ -14,6 +14,9 @@ rm -f mr-*
 
 (cd ../../mrapps && go build $RACE -buildmode=plugin crash.go) || exit 1
 (cd ../../mrapps && go build $RACE -buildmode=plugin nocrash.go) || exit 1
+(cd .. && go build $RACE mrsequential.go) || exit 1
+(cd .. && go build $RACE mrcoordinator.go) || exit 1
+(cd .. && go build $RACE mrworker.go) || exit 1
 
 #########################################################
 echo '***' Starting crash test.

@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -9,43 +8,41 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-type concurrentMap struct {
+type cMap struct {
 	mx    sync.RWMutex
-	items map[string]int
+	items map[string]interface{}
 }
 
-func newConcurrentMap() *concurrentMap {
-	return &concurrentMap{
-		items: make(map[string]int),
+func newConcurrentSet() *cMap {
+	return &cMap{
+		items: make(map[string]interface{}),
 	}
 }
 
-func (m *concurrentMap) len() int {
+func (m *cMap) len() int {
 	m.mx.RLock()
 	defer m.mx.RUnlock()
 	return len(m.items)
 }
 
-func (m *concurrentMap) get(key string) int {
-	m.mx.RLock()
-	defer m.mx.RUnlock()
-	val, has := m.items[key]
-	if !has {
-		return -1
-	}
-	return val
-}
-
-func (m *concurrentMap) set(key string, val int) {
+func (m *cMap) set(key string, val interface{}) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 	m.items[key] = val
 }
 
-func (m *concurrentMap) pop(key string) {
+func (m *cMap) get(key string) (interface{}, bool) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+	val, ok := m.items[key]
+	return val, ok
+}
+
+func (m *cMap) pop(key string) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 	delete(m.items, key)
@@ -87,27 +84,32 @@ type Coordinator struct {
 	constants       *coordinatorConstants
 	mapTasksToDo    chan Task
 	reduceTasksToDo chan Task
-	tasksInProgress *concurrentMap
-	tasksDone       *concurrentMap
+	tasksInProgress *cMap
+	tasksDone       *cMap
+	badTasks        *cMap
+	lastWorkerID    int64
 }
 
 func (c *Coordinator) restartTaskByTimeout(reply Reply) {
 	timeout := c.constants.getTimeout()
 	elapsedTimeSeconds := 0
 	for {
-		val := c.tasksDone.get(reply.Task.FileName)
-		if elapsedTimeSeconds >= timeout && val == -1 {
+		_, has := c.tasksDone.get(reply.Task.StringRepr)
+		if elapsedTimeSeconds >= timeout && !has {
 			switch reply.Mode {
 			case Map:
-				removeFiles(fmt.Sprintf("mr-%v*", reply.Task.Index))
 				c.mapTasksToDo <- reply.Task
+				workerID, hasTask := c.badTasks.get(reply.Task.StringRepr)
+				if hasTask && workerID.(int64) == -1 {
+					c.tasksDone.set(reply.Task.StringRepr, nil)
+				}
+				c.badTasks.set(reply.Task.StringRepr, reply.WorkerID) // NOTE: keeps only last failed workerid
 			case Reduce:
-				removeFiles(fmt.Sprintf("mr-out-%v*", reply.Task.Index))
 				c.reduceTasksToDo <- reply.Task
 			default:
 				return
 			}
-			c.tasksInProgress.pop(reply.Task.FileName)
+			c.tasksInProgress.pop(reply.Task.StringRepr)
 			return
 		}
 		time.Sleep(time.Second * 1)
@@ -127,20 +129,41 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+func (c *Coordinator) GenerateWorkerID(args *Args, reply *Reply) error {
+	id := atomic.LoadInt64(&c.lastWorkerID) + 1
+	reply.WorkerID = id
+	atomic.StoreInt64(&c.lastWorkerID, id)
+	return nil
+}
+
 func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
 	reply.Mode = None
+	reply.WorkerID = args.WorkerID
 	if len(c.mapTasksToDo) > 0 {
-		reply.Task = <-c.mapTasksToDo
+		task := <-c.mapTasksToDo
+		badWorker, has := c.badTasks.get(task.StringRepr)
+		if has {
+			badWorkerConv := badWorker.(int64)
+			if badWorkerConv == args.WorkerID {
+				// TODO: remove
+				log.Println("MAP TASK GOES BACK", task.StringRepr, args.WorkerID, c.tasksDone.len())
+				c.mapTasksToDo <- task
+				c.badTasks.set(task.StringRepr, int64(-1))
+				return nil
+			}
+		}
+		reply.Task = task
 		reply.Mode = Map
 		reply.NReduce = c.constants.getNReduce()
-		c.tasksInProgress.set(reply.Task.FileName, reply.Task.Index)
+		c.tasksInProgress.set(reply.Task.StringRepr, nil)
 		go c.restartTaskByTimeout(*reply)
 		return nil
 	}
 	if (len(c.reduceTasksToDo) > 0) && (c.tasksDone.len() >= c.constants.getMapTasksAmount()) {
-		reply.Task = <-c.reduceTasksToDo
+		task := <-c.reduceTasksToDo
+		reply.Task = task
 		reply.Mode = Reduce
-		c.tasksInProgress.set(reply.Task.FileName, reply.Task.Index)
+		c.tasksInProgress.set(reply.Task.StringRepr, nil)
 		go c.restartTaskByTimeout(*reply)
 		return nil
 	}
@@ -149,8 +172,8 @@ func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
 
 func (c *Coordinator) CommitTask(args *Args, reply *Reply) error {
 	if args.Mode != None {
-		c.tasksInProgress.pop(args.Task.FileName)
-		c.tasksDone.set(args.Task.FileName, args.Task.Index)
+		c.tasksInProgress.pop(args.Task.StringRepr)
+		c.tasksDone.set(args.Task.StringRepr, nil)
 	}
 	return nil
 }
@@ -198,15 +221,16 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		},
 		mapTasksToDo:    make(chan Task, len(files)),
 		reduceTasksToDo: make(chan Task, nReduce),
-		tasksInProgress: newConcurrentMap(),
-		tasksDone:       newConcurrentMap(),
+		tasksInProgress: newConcurrentSet(),
+		tasksDone:       newConcurrentSet(),
+		badTasks:        newConcurrentSet(),
 	}
 
 	for i, file := range files {
-		c.mapTasksToDo <- Task{FileName: file, Index: i}
+		c.mapTasksToDo <- NewTask(file, strconv.Itoa(i))
 	}
 	for i := 0; i < nReduce; i++ {
-		c.reduceTasksToDo <- Task{FileName: strconv.Itoa(i), Index: i}
+		c.reduceTasksToDo <- NewTask("@", strconv.Itoa(i))
 	}
 
 	c.server()

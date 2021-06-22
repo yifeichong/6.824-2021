@@ -31,19 +31,30 @@ type ExampleReply struct {
 // Add your RPC definitions here.
 // Args holds the list of intermediate
 type Task struct {
-	Index    int
-	FileName string
+	Index      string
+	FileName   string
+	StringRepr string
+}
+
+func NewTask(filename, index string) Task {
+	return Task{
+		Index:      index,
+		FileName:   filename,
+		StringRepr: index + filename,
+	}
 }
 
 type Args struct {
-	Mode int // NOTE: enum for operation type - Map or Reduce
-	Task Task
+	Mode     int // NOTE: enum for operation type - Map or Reduce
+	WorkerID int64
+	Task     Task
 }
 
 type Reply struct {
-	Mode    int // NOTE: enum for operation type - Map or Reduce
-	NReduce int
-	Task    Task
+	Mode     int // NOTE: enum for operation type - Map or Reduce
+	NReduce  int
+	Task     Task
+	WorkerID int64
 }
 
 // Cook up a unique-ish UNIX-domain socket name

@@ -13,10 +13,12 @@ Implementation of the map reduce should produce the same output as a sequential 
 To run map-reduce, first compile the plugin with map and reduce functions (placed in `./mrapps`):  
 ```
 go build -race -buildmode=plugin ../mrapps/wc.go
+go build -race mrworker.go
+go build -race mrcoordinator.go
 ```  
 Then you're ready to run the coordinator (master) process:
 ```
-rm -f mr-out*
+rm -f mr-*
 go run -race mrcoordinator.go pg-*.txt
 ```  
 And then run several workers in the other shells passing file name of the pre-built app (placed in `./main` after being built):  

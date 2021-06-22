@@ -139,13 +139,17 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 	args := Args{}
 	reply := Reply{}
+	success := call("Coordinator.GenerateWorkerID", &Args{}, &reply)
+	if !success {
+		return // NOTE: terminate if it's smth wrong with the coordinator
+	}
+	workerID := reply.WorkerID
 	for {
 		time.Sleep(time.Second * 1)
-		success := call("Coordinator.ScheduleTask", &Args{}, &reply)
+		success := call("Coordinator.ScheduleTask", &Args{WorkerID: workerID}, &reply)
 		if !success {
 			return // NOTE: terminate if it's smth wrong with the coordinator
 		}
-
 		switch reply.Mode {
 		case Map:
 			fnames, err := filepath.Glob(reply.Task.FileName)
@@ -153,12 +157,12 @@ func Worker(mapf func(string, string) []KeyValue,
 				continue
 			}
 			// NOTE: fill the intermediate kv pairs map for each reducer first
-			tempFnames := make(map[int]string)
 			for _, fname := range fnames {
 				content, err := readFile(fname)
 				if err != nil {
 					log.Fatal(err)
 				}
+				tempFnames := make(map[int]string)
 				kva := mapf(fname, content)
 				for _, kv := range kva {
 					reduceTaskNumber := ihash(kv.Key) % reply.NReduce
@@ -175,12 +179,12 @@ func Worker(mapf func(string, string) []KeyValue,
 						log.Fatal(err)
 					}
 				}
-			}
-			for k, v := range tempFnames {
-				intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
-				err = os.Rename(v, intermediateFname)
-				if err != nil {
-					log.Fatal(err)
+				for k, v := range tempFnames {
+					intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
+					err = os.Rename(v, intermediateFname)
+					if err != nil {
+						log.Fatal(err)
+					}
 				}
 			}
 		case Reduce:
@@ -192,7 +196,10 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 			intermediate := []KeyValue{}
 			for _, fname := range fnames {
-				kva, _ := readIntermediateFile(fname)
+				kva, err := readIntermediateFile(fname)
+				if err != nil {
+					log.Fatal(err)
+				}
 				intermediate = append(intermediate, kva...)
 			}
 			if len(intermediate) == 0 {
