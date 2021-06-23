@@ -98,22 +98,24 @@ func (c *Coordinator) restartTaskByTimeout(reply Reply) {
 		if elapsedTimeSeconds >= timeout && !has {
 			switch reply.Mode {
 			case Map:
-				// TODO: remove
-				log.Println("MAP FAILED", reply.Task.FileName)
+				// // TODO: remove
+				// log.Println("MAP FAILED", reply.Task.FileName, reply.WorkerID)
 				c.mapTasksToDo <- reply.Task
+
+				// NOTE: place task in the black list
+				_, hasTask := c.badTasks.get(reply.Task.StringRepr)
+				if hasTask {
+					c.tasksDone.set(reply.Task.StringRepr, nil)
+				}
+				c.badTasks.set(reply.Task.StringRepr, reply.WorkerID) // NOTE: keeps only last failed workerid
+
 			case Reduce:
-				// TODO: remove
-				log.Println("REDUCE FAILED", reply.Task.Index)
+				// // TODO: remove
+				// log.Println("REDUCE FAILED", reply.Task.Index, reply.WorkerID)
 				c.reduceTasksToDo <- reply.Task
 			default:
 				return
 			}
-
-			// _, hasTask := c.badTasks.get(reply.Task.StringRepr)
-			// if hasTask {
-			// 	c.tasksDone.set(reply.Task.StringRepr, nil)
-			// }
-			// c.badTasks.set(reply.Task.StringRepr, reply.WorkerID) // NOTE: keeps only last failed workerid
 
 			c.tasksInProgress.pop(reply.Task.StringRepr)
 			return
@@ -129,8 +131,6 @@ func (c *Coordinator) GenerateWorkerID(args *Args, reply *Reply) error {
 	id := atomic.LoadInt64(&c.lastWorkerID) + 1
 	reply.WorkerID = id
 	atomic.StoreInt64(&c.lastWorkerID, id)
-	// TODO: remove
-	log.Println("NEW WORKER", id)
 	return nil
 }
 
@@ -206,7 +206,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			nTotal:  nReduce + len(files),
 			timeout: 10, // NOTE: wait 10 seconds max, then re-schedule task
 		},
-		mapTasksToDo:    make(chan Task, len(files)),
+		mapTasksToDo:    make(chan Task, len(files)*2),
 		reduceTasksToDo: make(chan Task, nReduce),
 		tasksInProgress: newConcurrentSet(),
 		tasksDone:       newConcurrentSet(),

@@ -163,6 +163,9 @@ func runMap(reply Reply, mapf func(string, string) []KeyValue) error {
 		}
 		for k, v := range tempFnames {
 			intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
+			if _, err := os.Stat(intermediateFname); err == nil {
+				continue
+			}
 			err = os.Rename(v, intermediateFname)
 			if err != nil {
 				return err
@@ -216,6 +219,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 	args := Args{}
 	reply := Reply{}
+	// NOTE: get the worker id from the coordinator
 	success := call("Coordinator.GenerateWorkerID", &Args{}, &reply)
 	if !success {
 		return // NOTE: terminate if it's smth wrong with the coordinator
