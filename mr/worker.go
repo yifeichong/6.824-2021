@@ -2,6 +2,7 @@ package mr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -130,6 +131,82 @@ func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
+func runMap(reply Reply, mapf func(string, string) []KeyValue) error {
+	fnames, err := filepath.Glob(reply.Task.FileName)
+	if err != nil {
+		return err
+	}
+	if len(fnames) == 0 {
+		return errors.New("")
+	}
+	for _, fname := range fnames {
+		content, err := readFile(fname)
+		if err != nil {
+			return err
+		}
+		tempFnames := make(map[int]string)
+		kva := mapf(fname, content)
+		for _, kv := range kva {
+			reduceTaskNumber := ihash(kv.Key) % reply.NReduce
+			tempFname, ok := tempFnames[reduceTaskNumber]
+			if !ok {
+				tempFname, err = generateTmpFile()
+				if err != nil {
+					return err
+				}
+				tempFnames[reduceTaskNumber] = tempFname
+			}
+			err = writeIntermediateFile(tempFname, kv)
+			if err != nil {
+				return err
+			}
+		}
+		for k, v := range tempFnames {
+			intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
+			err = os.Rename(v, intermediateFname)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func runReduce(reply Reply, reducef func(string, []string) string) error {
+	fileNamePattern := fmt.Sprintf("*-%v", reply.Task.Index)
+	fnames, err := filepath.Glob(fileNamePattern)
+	if err != nil {
+		return err
+	}
+	if len(fnames) == 0 {
+		return errors.New("")
+	}
+	intermediate := []KeyValue{}
+	for _, fname := range fnames {
+		kva, err := readIntermediateFile(fname)
+		if err != nil {
+			return err
+		}
+		intermediate = append(intermediate, kva...)
+	}
+	if len(intermediate) == 0 {
+		return errors.New("")
+	}
+	sort.Sort(ByKey(intermediate))
+
+	oname := fmt.Sprintf("mr-out-%v", reply.Task.Index)
+	err = writeReduce(oname, intermediate, reducef)
+	if err != nil {
+		return err
+	}
+	// NOTE: after writing the final result, we can delete
+	//       intermediate files for that reducer
+	for _, fname := range fnames {
+		os.Remove(fname)
+	}
+	return nil
+}
+
 //
 // main/mrworker.go calls this function.
 //
@@ -152,70 +229,14 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		switch reply.Mode {
 		case Map:
-			fnames, err := filepath.Glob(reply.Task.FileName)
-			if err != nil || len(fnames) == 0 {
+			err := runMap(reply, mapf)
+			if err != nil {
 				continue
-			}
-			// NOTE: fill the intermediate kv pairs map for each reducer first
-			for _, fname := range fnames {
-				content, err := readFile(fname)
-				if err != nil {
-					log.Fatal(err)
-				}
-				tempFnames := make(map[int]string)
-				kva := mapf(fname, content)
-				for _, kv := range kva {
-					reduceTaskNumber := ihash(kv.Key) % reply.NReduce
-					tempFname, ok := tempFnames[reduceTaskNumber]
-					if !ok {
-						tempFname, err = generateTmpFile()
-						if err != nil {
-							log.Fatal(err)
-						}
-						tempFnames[reduceTaskNumber] = tempFname
-					}
-					err = writeIntermediateFile(tempFname, kv)
-					if err != nil {
-						log.Fatal(err)
-					}
-				}
-				for k, v := range tempFnames {
-					intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
-					err = os.Rename(v, intermediateFname)
-					if err != nil {
-						log.Fatal(err)
-					}
-				}
 			}
 		case Reduce:
-			fileNamePattern := fmt.Sprintf("*-%v", reply.Task.Index)
-			fnames, err := filepath.Glob(fileNamePattern)
-
-			if err != nil || len(fnames) == 0 {
-				continue
-			}
-			intermediate := []KeyValue{}
-			for _, fname := range fnames {
-				kva, err := readIntermediateFile(fname)
-				if err != nil {
-					log.Fatal(err)
-				}
-				intermediate = append(intermediate, kva...)
-			}
-			if len(intermediate) == 0 {
-				continue
-			}
-			sort.Sort(ByKey(intermediate))
-
-			oname := fmt.Sprintf("mr-out-%v", reply.Task.Index)
-			err = writeReduce(oname, intermediate, reducef)
+			err := runReduce(reply, reducef)
 			if err != nil {
-				log.Fatal(err)
-			}
-			// NOTE: after writing the final result, we can delete
-			//       intermediate files for that reducer
-			for _, fname := range fnames {
-				os.Remove(fname)
+				continue
 			}
 		default:
 			continue
@@ -230,33 +251,6 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 		}
 	}
-
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-
-}
-
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Coordinator.Example", &args, &reply)
-
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
 //

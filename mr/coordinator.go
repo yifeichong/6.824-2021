@@ -98,17 +98,23 @@ func (c *Coordinator) restartTaskByTimeout(reply Reply) {
 		if elapsedTimeSeconds >= timeout && !has {
 			switch reply.Mode {
 			case Map:
+				// TODO: remove
+				log.Println("MAP FAILED", reply.Task.FileName)
 				c.mapTasksToDo <- reply.Task
-				workerID, hasTask := c.badTasks.get(reply.Task.StringRepr)
-				if hasTask && workerID.(int64) == -1 {
-					c.tasksDone.set(reply.Task.StringRepr, nil)
-				}
-				c.badTasks.set(reply.Task.StringRepr, reply.WorkerID) // NOTE: keeps only last failed workerid
 			case Reduce:
+				// TODO: remove
+				log.Println("REDUCE FAILED", reply.Task.Index)
 				c.reduceTasksToDo <- reply.Task
 			default:
 				return
 			}
+
+			// _, hasTask := c.badTasks.get(reply.Task.StringRepr)
+			// if hasTask {
+			// 	c.tasksDone.set(reply.Task.StringRepr, nil)
+			// }
+			// c.badTasks.set(reply.Task.StringRepr, reply.WorkerID) // NOTE: keeps only last failed workerid
+
 			c.tasksInProgress.pop(reply.Task.StringRepr)
 			return
 		}
@@ -119,20 +125,12 @@ func (c *Coordinator) restartTaskByTimeout(reply Reply) {
 
 // Your code here -- RPC handlers for the worker to call.
 
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
-
 func (c *Coordinator) GenerateWorkerID(args *Args, reply *Reply) error {
 	id := atomic.LoadInt64(&c.lastWorkerID) + 1
 	reply.WorkerID = id
 	atomic.StoreInt64(&c.lastWorkerID, id)
+	// TODO: remove
+	log.Println("NEW WORKER", id)
 	return nil
 }
 
@@ -141,17 +139,6 @@ func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
 	reply.WorkerID = args.WorkerID
 	if len(c.mapTasksToDo) > 0 {
 		task := <-c.mapTasksToDo
-		badWorker, has := c.badTasks.get(task.StringRepr)
-		if has {
-			badWorkerConv := badWorker.(int64)
-			if badWorkerConv == args.WorkerID {
-				// TODO: remove
-				log.Println("MAP TASK GOES BACK", task.StringRepr, args.WorkerID, c.tasksDone.len())
-				c.mapTasksToDo <- task
-				c.badTasks.set(task.StringRepr, int64(-1))
-				return nil
-			}
-		}
 		reply.Task = task
 		reply.Mode = Map
 		reply.NReduce = c.constants.getNReduce()

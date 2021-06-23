@@ -15,21 +15,8 @@ const (
 	None
 )
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
 // Add your RPC definitions here.
-// Args holds the list of intermediate
+// Args holds the list of intermediate <-- TODO: add list of intermediate filenames to the args
 type Task struct {
 	Index      string
 	FileName   string
