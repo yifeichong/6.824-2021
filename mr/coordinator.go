@@ -102,12 +102,8 @@ func (c *Coordinator) restartTaskByTimeout(task Task) {
 		if elapsedTimeSeconds >= timeout && !has {
 			switch task.Mode {
 			case Map:
-				// // TODO: remove
-				// log.Println("MAP FAILED", task.FileName)
 				c.failedMapTasks <- task
 			case Reduce:
-				// // TODO: remove
-				// log.Println("REDUCE FAILED", task.Index)
 				c.failedReduceTasks <- task
 			}
 			return

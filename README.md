@@ -28,9 +28,9 @@ go run -race mrworker.go ./wc.so
 
 ### How it works  
   - we spawn several workers and a single coordinator (a.k.a master) process;  
-  - user provide list of files to master;  
-  - each worker in a loop makes task request for master;  
+  - client program provides list of files and number of reducers to master;  
+  - each worker in a loop makes task request to master;  
   - while initializing, master fills the tasks channels with the passed filenames and gives tasks to workers by request;  
-  - master stores three lists of tasks: *todo*, *inprogress* and *done*. If for some reason task execution has been failed - master just adds the failed task (filename pattern at our case) to the *todo* channel;  
-  - during execution, workers stores intermidiate and final results locally, followed by certain naming pattern;  
+  - master stores five "lists" of tasks: *map_todo*, *reduce_todo*, *map_failed*, *reduce_failed* and *done*. If for some reason task execution has been failed - master just adds the failed task to the *failed* channels;  
+  - during execution, workers store intermidiate and final results locally, followed by certain naming pattern;  
   - after both map and reduce stages finished - coordinator terminates and workers termites too, when they can't reach the master;  

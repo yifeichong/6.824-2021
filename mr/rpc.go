@@ -16,7 +16,7 @@ const (
 )
 
 // Add your RPC definitions here.
-// Args holds the list of intermediate <-- TODO: add list of intermediate filenames to the args
+// Args holds the list of intermediate
 type Task struct {
 	Index      string
 	FileName   string
