@@ -21,27 +21,25 @@ type Task struct {
 	Index      string
 	FileName   string
 	StringRepr string
+	Mode       int // NOTE: enum for operation type - Map or Reduce
 }
 
-func NewTask(filename, index string) Task {
+func NewTask(filename, index string, mode int) Task {
 	return Task{
 		Index:      index,
 		FileName:   filename,
 		StringRepr: index + filename,
+		Mode:       mode,
 	}
 }
 
 type Args struct {
-	Mode     int // NOTE: enum for operation type - Map or Reduce
-	WorkerID int64
-	Task     Task
+	Task Task
 }
 
 type Reply struct {
-	Mode     int // NOTE: enum for operation type - Map or Reduce
-	NReduce  int
-	Task     Task
-	WorkerID int64
+	NReduce int
+	Task    Task
 }
 
 // Cook up a unique-ish UNIX-domain socket name

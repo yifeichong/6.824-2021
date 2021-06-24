@@ -8,47 +8,49 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-type cMap struct {
+type cSet struct {
 	mx    sync.RWMutex
-	items map[string]interface{}
+	items map[string]bool
 }
 
-func newConcurrentSet() *cMap {
-	return &cMap{
-		items: make(map[string]interface{}),
+func newCSet() *cSet {
+	return &cSet{
+		items: make(map[string]bool),
 	}
 }
 
-func (m *cMap) len() int {
+func (m *cSet) len() int {
 	m.mx.RLock()
 	defer m.mx.RUnlock()
 	return len(m.items)
 }
 
-func (m *cMap) set(key string, val interface{}) {
+func (m *cSet) set(key string) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
-	m.items[key] = val
+	m.items[key] = true
 }
 
-func (m *cMap) get(key string) (interface{}, bool) {
+func (m *cSet) has(key string) bool {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 	val, ok := m.items[key]
-	return val, ok
+	if !ok {
+		return ok
+	}
+	return val && ok
 }
 
-func (m *cMap) pop(key string) {
+func (m *cSet) pop(key string) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 	delete(m.items, key)
 }
 
-type coordinatorConstants struct {
+type constants struct {
 	mx      sync.RWMutex
 	nMap    int
 	nReduce int
@@ -56,68 +58,58 @@ type coordinatorConstants struct {
 	timeout int
 }
 
-func (c *coordinatorConstants) getTotalTasksAmount() int {
+func (c *constants) getTotalTasksAmount() int {
 	c.mx.RLock()
 	defer c.mx.RUnlock()
 	return c.nTotal
 }
 
-func (c *coordinatorConstants) getMapTasksAmount() int {
+func (c *constants) getNMap() int {
 	c.mx.RLock()
 	defer c.mx.RUnlock()
 	return c.nMap
 }
 
-func (c *coordinatorConstants) getNReduce() int {
+func (c *constants) getNReduce() int {
 	c.mx.RLock()
 	defer c.mx.RUnlock()
 	return c.nReduce
 }
 
-func (c *coordinatorConstants) getTimeout() int {
+func (c *constants) getTimeout() int {
 	c.mx.RLock()
 	defer c.mx.RUnlock()
 	return c.timeout
 }
 
 type Coordinator struct {
-	constants       *coordinatorConstants
-	mapTasksToDo    chan Task
-	reduceTasksToDo chan Task
-	tasksInProgress *cMap
-	tasksDone       *cMap
-	badTasks        *cMap
-	lastWorkerID    int64
+	constants         *constants
+	mapTasks          chan Task
+	reduceTasks       chan Task
+	failedMapTasks    chan Task
+	failedReduceTasks chan Task
+	tasksDone         *cSet
 }
 
-func (c *Coordinator) restartTaskByTimeout(reply Reply) {
+func (c *Coordinator) restartTaskByTimeout(task Task) {
+	if task.Mode == None {
+		return
+	}
 	timeout := c.constants.getTimeout()
 	elapsedTimeSeconds := 0
 	for {
-		_, has := c.tasksDone.get(reply.Task.StringRepr)
+		has := c.tasksDone.has(task.StringRepr)
 		if elapsedTimeSeconds >= timeout && !has {
-			switch reply.Mode {
+			switch task.Mode {
 			case Map:
 				// // TODO: remove
-				// log.Println("MAP FAILED", reply.Task.FileName, reply.WorkerID)
-				c.mapTasksToDo <- reply.Task
-
-				// NOTE: place task in the black list
-				_, hasTask := c.badTasks.get(reply.Task.StringRepr)
-				if hasTask {
-					c.tasksDone.set(reply.Task.StringRepr, nil)
-				}
-				c.badTasks.set(reply.Task.StringRepr, reply.WorkerID) // NOTE: keeps only last failed workerid
-
+				// log.Println("MAP FAILED", task.FileName)
+				c.failedMapTasks <- task
 			case Reduce:
 				// // TODO: remove
-				// log.Println("REDUCE FAILED", reply.Task.Index, reply.WorkerID)
-				c.reduceTasksToDo <- reply.Task
-			default:
-				return
+				// log.Println("REDUCE FAILED", task.Index)
+				c.failedReduceTasks <- task
 			}
-
-			c.tasksInProgress.pop(reply.Task.StringRepr)
 			return
 		}
 		time.Sleep(time.Second * 1)
@@ -125,42 +117,66 @@ func (c *Coordinator) restartTaskByTimeout(reply Reply) {
 	}
 }
 
-// Your code here -- RPC handlers for the worker to call.
-
-func (c *Coordinator) GenerateWorkerID(args *Args, reply *Reply) error {
-	id := atomic.LoadInt64(&c.lastWorkerID) + 1
-	reply.WorkerID = id
-	atomic.StoreInt64(&c.lastWorkerID, id)
-	return nil
+func (c *Coordinator) getCurrentStage() int {
+	if (len(c.failedMapTasks) + len(c.mapTasks)) > 0 {
+		return Map
+	}
+	nReduceWait := len(c.failedReduceTasks) + len(c.reduceTasks)
+	if (c.tasksDone.len() >= c.constants.getNMap()) && (nReduceWait > 0) {
+		return Reduce
+	}
+	return None
 }
 
+// NOTE: non-blocking value reading
+func getTaskFromChan(ch chan Task) (Task, bool) {
+	task := Task{}
+	select {
+	case task, ok := <-ch:
+		if ok {
+			return task, true
+		}
+		return task, false
+	default:
+		return task, false
+	}
+}
+
+func selectFirstTask(chans []chan Task) (Task, bool) {
+	task := Task{}
+	for _, ch := range chans {
+		task, ok := getTaskFromChan(ch)
+		if ok {
+			return task, ok
+		}
+
+	}
+	return task, false
+}
+
+// Your code here -- RPC handlers for the worker to call.
+
 func (c *Coordinator) ScheduleTask(args *Args, reply *Reply) error {
-	reply.Mode = None
-	reply.WorkerID = args.WorkerID
-	if len(c.mapTasksToDo) > 0 {
-		task := <-c.mapTasksToDo
-		reply.Task = task
-		reply.Mode = Map
+	switch c.getCurrentStage() {
+	case Map:
+		task, ok := selectFirstTask([]chan Task{c.failedMapTasks, c.mapTasks})
+		if ok {
+			reply.Task = task
+		}
 		reply.NReduce = c.constants.getNReduce()
-		c.tasksInProgress.set(reply.Task.StringRepr, nil)
-		go c.restartTaskByTimeout(*reply)
-		return nil
+	case Reduce:
+		task, ok := selectFirstTask([]chan Task{c.failedReduceTasks, c.reduceTasks})
+		if ok {
+			reply.Task = task
+		}
 	}
-	if (len(c.reduceTasksToDo) > 0) && (c.tasksDone.len() >= c.constants.getMapTasksAmount()) {
-		task := <-c.reduceTasksToDo
-		reply.Task = task
-		reply.Mode = Reduce
-		c.tasksInProgress.set(reply.Task.StringRepr, nil)
-		go c.restartTaskByTimeout(*reply)
-		return nil
-	}
+	go c.restartTaskByTimeout(reply.Task)
 	return nil
 }
 
 func (c *Coordinator) CommitTask(args *Args, reply *Reply) error {
-	if args.Mode != None {
-		c.tasksInProgress.pop(args.Task.StringRepr)
-		c.tasksDone.set(args.Task.StringRepr, nil)
+	if args.Task.Mode != None {
+		c.tasksDone.set(args.Task.StringRepr)
 	}
 	return nil
 }
@@ -186,11 +202,7 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
-	if c.constants.getTotalTasksAmount() == c.tasksDone.len() {
-		ret = true
-	}
-	return ret
+	return c.constants.getTotalTasksAmount() == c.tasksDone.len()
 }
 
 //
@@ -200,26 +212,24 @@ func (c *Coordinator) Done() bool {
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		constants: &coordinatorConstants{
+		constants: &constants{
 			nMap:    len(files),
 			nReduce: nReduce,
 			nTotal:  nReduce + len(files),
 			timeout: 10, // NOTE: wait 10 seconds max, then re-schedule task
 		},
-		mapTasksToDo:    make(chan Task, len(files)*2),
-		reduceTasksToDo: make(chan Task, nReduce),
-		tasksInProgress: newConcurrentSet(),
-		tasksDone:       newConcurrentSet(),
-		badTasks:        newConcurrentSet(),
+		mapTasks:          make(chan Task, len(files)),
+		reduceTasks:       make(chan Task, nReduce),
+		failedMapTasks:    make(chan Task, len(files)),
+		failedReduceTasks: make(chan Task, nReduce),
+		tasksDone:         newCSet(),
 	}
-
 	for i, file := range files {
-		c.mapTasksToDo <- NewTask(file, strconv.Itoa(i))
+		c.mapTasks <- NewTask(file, strconv.Itoa(i), Map)
 	}
 	for i := 0; i < nReduce; i++ {
-		c.reduceTasksToDo <- NewTask("@", strconv.Itoa(i))
+		c.reduceTasks <- NewTask("@", strconv.Itoa(i), Reduce)
 	}
-
 	c.server()
 	return &c
 }

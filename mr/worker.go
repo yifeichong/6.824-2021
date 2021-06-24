@@ -87,7 +87,7 @@ func readIntermediateFile(fname string) ([]KeyValue, error) {
 }
 
 func writeReduce(oname string, intermediate []KeyValue, reducef func(string, []string) string) error {
-	ofile, err := ioutil.TempFile("./", "mr.*")
+	ofile, err := ioutil.TempFile("./", "mr.reduce.*")
 	if err != nil {
 		return err
 	}
@@ -132,45 +132,30 @@ func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 func runMap(reply Reply, mapf func(string, string) []KeyValue) error {
-	fnames, err := filepath.Glob(reply.Task.FileName)
+	content, err := readFile(reply.Task.FileName)
 	if err != nil {
 		return err
 	}
-	if len(fnames) == 0 {
-		return errors.New("")
+	tempFnames := make(map[int]string)
+	kva := mapf(reply.Task.FileName, content)
+	for _, kv := range kva {
+		reduceTaskNumber := ihash(kv.Key) % reply.NReduce
+		tempFname, ok := tempFnames[reduceTaskNumber]
+		if !ok {
+			tempFname, err = generateTmpFile()
+			if err != nil {
+				return err
+			}
+			tempFnames[reduceTaskNumber] = tempFname
+		}
+		writeIntermediateFile(tempFname, kv)
 	}
-	for _, fname := range fnames {
-		content, err := readFile(fname)
-		if err != nil {
-			return err
+	for k, v := range tempFnames {
+		intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
+		if _, err := os.Stat(intermediateFname); err == nil {
+			continue
 		}
-		tempFnames := make(map[int]string)
-		kva := mapf(fname, content)
-		for _, kv := range kva {
-			reduceTaskNumber := ihash(kv.Key) % reply.NReduce
-			tempFname, ok := tempFnames[reduceTaskNumber]
-			if !ok {
-				tempFname, err = generateTmpFile()
-				if err != nil {
-					return err
-				}
-				tempFnames[reduceTaskNumber] = tempFname
-			}
-			err = writeIntermediateFile(tempFname, kv)
-			if err != nil {
-				return err
-			}
-		}
-		for k, v := range tempFnames {
-			intermediateFname := fmt.Sprintf("mr-%v-%v", reply.Task.Index, k)
-			if _, err := os.Stat(intermediateFname); err == nil {
-				continue
-			}
-			err = os.Rename(v, intermediateFname)
-			if err != nil {
-				return err
-			}
-		}
+		os.Rename(v, intermediateFname)
 	}
 	return nil
 }
@@ -182,7 +167,7 @@ func runReduce(reply Reply, reducef func(string, []string) string) error {
 		return err
 	}
 	if len(fnames) == 0 {
-		return errors.New("")
+		return nil //
 	}
 	intermediate := []KeyValue{}
 	for _, fname := range fnames {
@@ -219,19 +204,13 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 	args := Args{}
 	reply := Reply{}
-	// NOTE: get the worker id from the coordinator
-	success := call("Coordinator.GenerateWorkerID", &Args{}, &reply)
-	if !success {
-		return // NOTE: terminate if it's smth wrong with the coordinator
-	}
-	workerID := reply.WorkerID
 	for {
 		time.Sleep(time.Second * 1)
-		success := call("Coordinator.ScheduleTask", &Args{WorkerID: workerID}, &reply)
+		success := call("Coordinator.ScheduleTask", &Args{}, &reply)
 		if !success {
 			return // NOTE: terminate if it's smth wrong with the coordinator
 		}
-		switch reply.Mode {
+		switch reply.Task.Mode {
 		case Map:
 			err := runMap(reply, mapf)
 			if err != nil {
@@ -247,7 +226,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 
 		args = Args{
-			Mode: reply.Mode,
 			Task: reply.Task,
 		}
 		success = call("Coordinator.CommitTask", &args, &Reply{})
