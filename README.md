@@ -1,6 +1,6 @@
 # MIT 6.824 Distributed systems  
 
-## Map Reduce  
+## 1. Map Reduce  
 
 ### How to run  
 Implementation of map reduce is inside `./mr` directory. It consists of coordinator and worker.  
