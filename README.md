@@ -34,3 +34,20 @@ go run -race mrworker.go ./wc.so
   - master stores five "lists" of tasks: *map_todo*, *reduce_todo*, *map_failed*, *reduce_failed* and *done*. If for some reason task execution has been failed - master just adds the failed task to the *failed* channels;  
   - during execution, workers store intermidiate and final results locally, followed by certain naming pattern;  
   - after both map and reduce stages finished - coordinator terminates and workers termites too, when they can't reach the master;  
+
+## 2. Raft  
+
+Navigate to the `./raft` directory first.  
+Run tests:  
+```
+go test -race
+```  
+You can also run tests separately by providing the test name prefix:  
+```  
+go test -run <TEST_NAME_PREFIX> -race
+```  
+Possible prefixes:  
+ - `2A` - leader election;  
+ - `2B` - log replication;  
+ - `2C` - persistence;  
+ - `2D` - log compaction;  
