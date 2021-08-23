@@ -383,6 +383,8 @@ func (cfg *config) checkOneLeader() int {
 			}
 		}
 
+		log.Println("TEST", leaders)
+
 		lastTermWithLeader := -1
 		for term, leaders := range leaders {
 			if len(leaders) > 1 {

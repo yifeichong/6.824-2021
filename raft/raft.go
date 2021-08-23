@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"log"
 	"time"
 	//	"bytes"
 	"math/rand"
@@ -88,7 +89,9 @@ type Raft struct {
 	nextIndexes  []int // index of the next log entry to send
 	matchIndexes []int // highest log entry index commited
 
-	state int // follower, condidate or leader
+	state                int // follower, condidate or leader
+	leaderID             int
+	heartsbeatsRepliesCh chan AppendEntriesReply
 
 	// Timeouts in ms
 	heartsbeatsTimeout int32
@@ -198,10 +201,14 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+
+	// log.Println("VOTE_START", "ME", rf.me)
+
+	rf.resetElectionTimer()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.resetElectionTimer()
 
+	reply.Term = rf.currentTerm
 	if rf.currentTerm > args.Term {
 		return
 	}
@@ -209,8 +216,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 		rf.state = FOLLOWER
 		rf.votedFor = -1
+		rf.leaderID = -1
+		reply.Term = args.Term
 	}
-	reply.Term = rf.currentTerm
 	recieverLastLogIndex := len(rf.logs)
 	var recieverLastLogTerm int
 	if recieverLastLogIndex > 0 {
@@ -220,8 +228,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateID) && logUpToDate {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateID
-		rf.currentTerm = args.Term
 	}
+	log.Println(
+		"VOTE_END",
+		"ME", rf.me,
+		"CANDIDATE", args.CandidateID,
+		"VOTE", rf.votedFor,
+		"REPLY_VOTE", reply.VoteGranted,
+		"TERM", args.Term,
+		"CURR_TERM", rf.currentTerm,
+	)
 }
 
 //
@@ -258,50 +274,199 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) runElection() {
+type AppendEntriesArgs struct {
+	Term     int
+	LeaderID int
+	// TODO: 2B
+}
+
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+	SelfID  int
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.resetElectionTimer()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	log.Println("APP REQ", "ME", rf.me, "STATE", rf.state, "TERM", rf.currentTerm, "NEW_TERM", args.Term, "LEADER", args.LeaderID)
+
+	reply.SelfID = rf.me
+	if rf.currentTerm < args.Term || rf.state == CANDIDATE {
+		rf.currentTerm = args.Term
+		rf.state = FOLLOWER
+		rf.votedFor = -1
+	}
+	reply.Term = rf.currentTerm
+
+	if rf.currentTerm > args.Term {
+		return
+	}
+
+	rf.leaderID = args.LeaderID
+
+	// TODO: 2B
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+func (rf *Raft) runElection() {
 	// Increases the current term, votes for itself,
 	// changes the node state
+	rf.mu.Lock()
 	rf.currentTerm++
+	currentTerm := rf.currentTerm
 	rf.votedFor = rf.me
 	rf.state = CANDIDATE
+	rf.mu.Unlock()
 
 	// Request votes from all the peers
-	var votes, lastLogTerm int
-	var reply *RequestVoteReply
+	rf.mu.RLock()
+	nPeers := len(rf.peers)
+	me := rf.me
 	lastLogIndex := len(rf.logs)
+	var lastLogTerm int
 	if lastLogIndex > 0 {
 		lastLogTerm = rf.logs[lastLogIndex-1].term
 	}
-	args := RequestVoteArgs{
-		Term:         rf.currentTerm,
-		CandidateID:  rf.me,
-		LastLogIndex: lastLogIndex,
-		LastLogTerm:  lastLogTerm,
-	}
-	nPeers := len(rf.peers)
-	for i, peer := range rf.peers {
-		if i == rf.me {
+	rf.mu.RUnlock()
+
+	log.Println("ELECTION START", "ME", me, "TERM", currentTerm)
+
+	votesCh := make(chan bool, nPeers)
+	rf.resetElectionTimer()
+	for srv := 0; srv < nPeers; srv++ {
+		if srv == me {
+			votesCh <- true
 			continue
 		}
-		reply = &RequestVoteReply{}
-		ok := peer.Call("Raft.RequestVote", args, reply)
-		if ok && reply.VoteGranted {
-			votes++
-		}
+		go func(srv int) {
+			args := &RequestVoteArgs{
+				Term:         currentTerm,
+				CandidateID:  me,
+				LastLogIndex: lastLogIndex,
+				LastLogTerm:  lastLogTerm,
+			}
+			reply := &RequestVoteReply{}
+
+			// log.Println("GO_SEND", "ME", me, "SRV", srv, "TERM", args.Term)
+
+			ok := rf.sendRequestVote(
+				srv,
+				args,
+				reply,
+			)
+
+			if !ok || args.Term != reply.Term {
+				return
+			}
+			votesCh <- reply.VoteGranted
+
+			// log.Println(
+			// 	"GO_REPLY",
+			// 	"ME", me,
+			// 	"SRV", srv,
+			// 	"RESP", ok,
+			// 	"TERM", reply.Term,
+			// )
+		}(srv)
 	}
-	if votes > nPeers/2 {
-		rf.state = LEADER
-		go rf.heartbeats()
+
+	var votes int
+	halfPeers := nPeers / 2
+	for {
+		select {
+		case vote := <-votesCh:
+			if vote {
+				votes++
+			}
+			if votes > halfPeers {
+				rf.mu.Lock()
+				log.Println("BEFORE ELECTION END:", me, "TERM:", rf.currentTerm)
+				// In case term has been already changed while handling
+				// one of the incoming RequestVote RPCs
+				if rf.currentTerm > currentTerm || rf.state == FOLLOWER {
+					rf.mu.Unlock()
+					return
+				}
+				rf.state = LEADER
+				rf.nextIndexes = make([]int, 0)
+				rf.matchIndexes = make([]int, 0)
+				rf.mu.Unlock()
+				go rf.sendHeartsbeats()
+
+				log.Println("ELECTION END", "ME", me, "VOTES", votes, "PEERS", halfPeers, "TERM", currentTerm)
+
+				return
+			}
+		case <-rf.timerCanceled:
+			log.Println("ELECTION CANCELED", "ME", me, "TERM", currentTerm)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func (rf *Raft) heartbeats() {
-	for _, isLeader := rf.GetState(); isLeader; {
-		// Send empty AppendEntries to all followers
-		// Sleep for rf.heartsbeatsTimeout
+// TODO: 2B
+func (rf *Raft) sendHeartsbeats() {
+	rf.mu.RLock()
+	heartsbeatsTimeout := rf.heartsbeatsTimeout
+	currentTerm := rf.currentTerm
+	me := rf.me
+	nPeers := len(rf.peers)
+	rf.mu.RUnlock()
+
+	wg := sync.WaitGroup{}
+	go rf.processHeartsbeatsReplies()
+	for _, isLeader := rf.GetState(); isLeader && !rf.killed(); {
+		wg.Add(nPeers - 1)
+		for srv := 0; srv < nPeers; srv++ {
+			if srv == me {
+				continue
+			}
+			go func(srv int) {
+				defer wg.Done()
+				args := &AppendEntriesArgs{
+					Term:     currentTerm,
+					LeaderID: me,
+				}
+				reply := AppendEntriesReply{}
+				ok := rf.sendAppendEntries(srv, args, &reply)
+				if ok {
+					rf.heartsbeatsRepliesCh <- reply
+				}
+			}(srv)
+		}
+		// Heartsbeats will be sent *at least* every heartsbeatsTimeout ms
+		time.Sleep(time.Duration(heartsbeatsTimeout) * time.Millisecond)
+		wg.Wait()
+	}
+}
+
+// TODO: 2B
+func (rf *Raft) processHeartsbeatsReplies() {
+	for reply := range rf.heartsbeatsRepliesCh {
+		currentTerm, isLeader := rf.GetState()
+		if !isLeader {
+			return
+		}
+
+		rf.mu.RLock()
+		log.Println("APP REPL: ", rf.me, "FROM:", reply.SelfID, "TERM:", reply.Term, "CURR_TERM", currentTerm, isLeader)
+		rf.mu.RUnlock()
+
+		if reply.Term > currentTerm {
+			rf.mu.Lock()
+			rf.currentTerm = reply.Term
+			rf.state = FOLLOWER
+			rf.votedFor = -1
+			rf.mu.Unlock()
+		}
 	}
 }
 
@@ -357,7 +522,11 @@ func (rf *Raft) getRandElectionTimeout() int32 {
 }
 
 func (rf *Raft) resetElectionTimer() {
-	rf.timerCanceled <- true
+	select {
+	case rf.timerCanceled <- true:
+	default:
+		return
+	}
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -370,7 +539,9 @@ func (rf *Raft) ticker() {
 		timeout := rf.getRandElectionTimeout()
 		select {
 		case <-time.After(time.Duration(timeout) * time.Millisecond):
-			rf.runElection()
+			if _, isLeader := rf.GetState(); !isLeader {
+				go rf.runElection()
+			}
 		case <-rf.timerCanceled:
 			continue
 		}
@@ -398,11 +569,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rand.Seed(time.Now().UnixNano())
 	rf.votedFor = -1
+	rf.leaderID = -1
 	rf.state = FOLLOWER
-	rf.heartsbeatsTimeout = 100
-	rf.minElectionTimeout = 300
-	rf.maxElectionTimeout = 450
-	rf.timerCanceled = make(chan bool)
+	rf.heartsbeatsTimeout = 150
+	rf.minElectionTimeout = 250
+	rf.maxElectionTimeout = 350
+
+	rf.timerCanceled = make(chan bool, 1)
+	rf.logs = make([]logEntry, 0)
+
+	// Leaders volatile state
+	rf.nextIndexes = make([]int, 0)
+	rf.matchIndexes = make([]int, 0)
+	rf.heartsbeatsRepliesCh = make(chan AppendEntriesReply, len(rf.peers)-1)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
