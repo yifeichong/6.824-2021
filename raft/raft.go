@@ -297,19 +297,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	log.Println("APP REQ", "ME", rf.me, "STATE", rf.state, "TERM", rf.currentTerm, "NEW_TERM", args.Term, "LEADER", args.LeaderID)
 
 	reply.SelfID = rf.me
-	if rf.currentTerm < args.Term || rf.state == CANDIDATE {
+	if rf.currentTerm < args.Term || rf.state == CANDIDATE ||
+		(rf.state == LEADER && rf.currentTerm == args.Term) {
 		rf.currentTerm = args.Term
 		rf.state = FOLLOWER
 		rf.votedFor = -1
 	}
 	reply.Term = rf.currentTerm
+	// Can't trust the leader with the lower term
 	if rf.currentTerm > args.Term {
-		// Can't trust the leader with the lower term
 		rf.mu.Unlock()
 		return
 	}
 	rf.leaderID = args.LeaderID
-	if args.PrevLogIndex < 0 {
+	// Skip further logic if here is a simple heartsbeat
+	if args.PrevLogIndex <= 0 {
 		rf.mu.Unlock()
 		return
 	}
@@ -529,11 +531,11 @@ func (rf *Raft) sendHeartsbeats() {
 				lastLogIndex := len(rf.log)
 				nextIndex := rf.nextIndexes[srv]
 				if lastLogIndex >= nextIndex {
-					matchIndex := rf.matchIndexes[srv]
-					prevLogIndex = matchIndex - 1
+					// matchIndex := rf.matchIndexes[srv]
+					prevLogIndex = nextIndex - 1
 					if prevLogIndex > 0 {
 						prevLogTerm = rf.log[prevLogIndex-1].Term
-						entries = rf.log[matchIndex-1 : nextIndex-1]
+						entries = rf.log[nextIndex-1:]
 					}
 				}
 				rf.mu.RUnlock()
@@ -569,17 +571,11 @@ func (rf *Raft) handleHeartsbeatsReply(currentTerm int, reply AppendEntriesReply
 		return
 	}
 
-	// TODO (2B):
-	//   if fail:
-	//     - decrement nextIndex for the server
-	//   if success:
-	//     - update nextIndex and matchIndex
-	//     - calculate new commitIndex (see conditions in the table 2 for leaders)
-	//     - apply changes locally (push to the rf.applyCh)
+	// 2B
 	if !reply.Success {
 		for idx := len(rf.log); idx > 0; idx-- {
 			if rf.log[idx-1].Term < reply.PrevValidLogTerm {
-				rf.matchIndexes[reply.SelfID] = idx + 1
+				// rf.matchIndexes[reply.SelfID] = idx + 1
 				rf.nextIndexes[reply.SelfID] = idx + reply.PrevValidLogTermIndex + 1
 				break
 			}
@@ -591,7 +587,7 @@ func (rf *Raft) handleHeartsbeatsReply(currentTerm int, reply AppendEntriesReply
 	rf.nextIndexes[reply.SelfID] = len(rf.log) + 1
 	rf.matchIndexes[reply.SelfID] = reply.LastLogIndex
 
-	// calculate commitIndex
+	// Calculate commitIndex
 	votes := make(map[int]int)
 	for srv, idx := range rf.matchIndexes {
 		if srv == rf.me {
