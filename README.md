@@ -37,8 +37,9 @@ go run -race mrworker.go ./wc.so
 
 ## 2. Raft  
 
-Navigate to the `./raft` directory first.  
-Run tests:  
+I've implemented the core functionality of *raft* consensus: **elections** and **log replication**.  
+
+To tun tests, navigate to the `./raft` directory:  
 ```
 go test -race
 ```  
@@ -49,5 +50,5 @@ go test -run <TEST_NAME_PREFIX> -race
 Possible prefixes:  
  - `2A` - leader election;  
  - `2B` - log replication;  
- - `2C` - persistence;  
- - `2D` - log compaction;  
+ - `2C` - persistence (*not implemented*);  
+ - `2D` - log compaction (*not implemented*);  
