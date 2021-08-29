@@ -296,6 +296,7 @@ func (rn *Network) processReq(req reqMsg) {
 			// let Raft tests check that leader doesn't send
 			// RPCs synchronously.
 			ms = (rand.Int() % 7000)
+			// log.Println(">>>> DELAY", ms, servername)
 		} else {
 			// many kv tests require the client to try each
 			// server in fairly rapid succession.

@@ -47,6 +47,13 @@ You can also run tests separately by providing the test name prefix:
 ```  
 go test -run <TEST_NAME_PREFIX> -race
 ```  
+And keep in mind that some tests turned out to be flaky.  
+
+*TODO*
+Problems occurs after reconnecting peers:  
+ - TestRejoin2B - fail
+ - TestBackup2B - fail
+
 Possible prefixes:  
  - `2A` - leader election;  
  - `2B` - log replication;  
