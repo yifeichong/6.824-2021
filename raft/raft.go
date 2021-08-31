@@ -219,7 +219,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if recieverLastLogIndex > 0 {
 		recieverLastLogTerm = rf.log[recieverLastLogIndex-1].Term
 	}
-	logUpToDate := args.LastLogIndex >= recieverLastLogIndex && args.LastLogTerm <= recieverLastLogTerm
+	logUpToDate := args.LastLogTerm > recieverLastLogTerm ||
+		(args.LastLogTerm == recieverLastLogTerm && args.LastLogIndex >= recieverLastLogIndex)
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateID) && logUpToDate {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateID
